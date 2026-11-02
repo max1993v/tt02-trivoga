@@ -1,0 +1,85 @@
+name: Build firmware
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  XIAOZHI_REF: v2.2.6
+  BOARD: aikoder-s3-lcd
+
+jobs:
+  fonts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Generate Cyrillic LVGL fonts
+        run: |
+          RANGE=0x20-0x7E,0xB7,0x2019,0x2026,0x400-0x45F,0x490-0x491
+          npx -y lv_font_conv@1.5.3 --font fonts/Inter-Bold.otf -r $RANGE --size 24 --bpp 4 \
+            --format lvgl --no-compress --lv-include lvgl.h --lv-font-name font_ua_bold_24 -o font_ua_bold_24.c
+          npx -y lv_font_conv@1.5.3 --font fonts/Inter-Medium.otf -r $RANGE --size 16 --bpp 4 \
+            --format lvgl --no-compress --lv-include lvgl.h --lv-font-name font_ua_med_16 -o font_ua_med_16.c
+          ls -la font_ua_*.c
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fonts
+          path: font_ua_*.c
+
+  build:
+    needs: fonts
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src
+      - uses: actions/download-artifact@v4
+        with:
+          name: fonts
+          path: fonts_out
+      - name: Prepare xiaozhi-esp32 + AiKoder board + air-alert module
+        shell: bash
+        run: |
+          git config --global --add safe.directory '*'
+          git clone --depth 1 -b "$XIAOZHI_REF" https://github.com/78/xiaozhi-esp32.git xz
+          cd xz
+          git apply ../src/patches/xiaozhi.patch
+          cp -r ../src/board/$BOARD main/boards/
+          cp ../fonts_out/font_ua_*.c main/boards/$BOARD/
+          ls main/boards/$BOARD
+      - name: Build
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          cd xz
+          python scripts/release.py $BOARD
+          ls -la build/*.bin releases/ || true
+      - name: Collect binaries
+        shell: bash
+        run: |
+          mkdir -p out
+          cp xz/build/merged-binary.bin out/tt02-trivoga-full-16MB.bin
+          cp xz/build/xiaozhi.bin out/tt02-trivoga-app.bin
+          cd out && sha256sum *.bin > SHA256SUMS.txt && ls -la
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: out/*
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: TT-02 Тривога · збірка ${{ github.run_number }}
+          make_latest: true
+          files: out/*
+          body: |
+            Прошивка для TT-02 (AiKoder S3 LCD) з мапою тривог і сиреною.
+            Як прошити — див. README.

@@ -1,0 +1,69 @@
+diff --git a/main/CMakeLists.txt b/main/CMakeLists.txt
+index 3d90620..192100c 100644
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -85,7 +85,12 @@ set(EMOTE_RESOLUTION "320_240")
+ 
+ # Add board files according to BOARD_TYPE
+ # Set default assets if the board uses partition table V2
+-if(CONFIG_BOARD_TYPE_BREAD_COMPACT_WIFI)
++if(CONFIG_BOARD_TYPE_AIKODER_S3_LCD)
++    set(BOARD_TYPE "aikoder-s3-lcd")
++    set(BUILTIN_TEXT_FONT font_puhui_basic_20_4)
++    set(BUILTIN_ICON_FONT font_awesome_20_4)
++    set(DEFAULT_EMOJI_COLLECTION twemoji_32)
++elseif(CONFIG_BOARD_TYPE_BREAD_COMPACT_WIFI)
+     set(BOARD_TYPE "bread-compact-wifi")
+     set(BUILTIN_TEXT_FONT font_puhui_basic_14_1)
+     set(BUILTIN_ICON_FONT font_awesome_14_1)
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+index e69337b..3503c45 100644
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -122,6 +122,9 @@ choice BOARD_TYPE
+     default BOARD_TYPE_BREAD_COMPACT_WIFI
+     help
+         Board type. 开发板类型
++    config BOARD_TYPE_AIKODER_S3_LCD
++        bool "AiKoder S3 LCD (ESP32-S3 + JD9853)"
++        depends on IDF_TARGET_ESP32S3
+     config BOARD_TYPE_BREAD_COMPACT_WIFI
+         bool "Bread Compact WiFi (面包板)"
+         depends on IDF_TARGET_ESP32S3
+diff --git a/main/audio/audio_codec.cc b/main/audio/audio_codec.cc
+index 03e2baa..c66f28c 100644
+--- a/main/audio/audio_codec.cc
++++ b/main/audio/audio_codec.cc
+@@ -15,6 +15,12 @@ AudioCodec::~AudioCodec() {
+ }
+ 
+ void AudioCodec::OutputData(std::vector<int16_t>& data) {
++    if (on_audio_level_) {
++        int64_t sum = 0;
++        for (int16_t sample : data) sum += sample < 0 ? -sample : sample;
++        float mean_abs = data.empty() ? 0.0f : (float)sum / data.size();
++        on_audio_level_(mean_abs / 32768.0f);
++    }
+     Write(data.data(), data.size());
+ }
+ 
+diff --git a/main/audio/audio_codec.h b/main/audio/audio_codec.h
+index 819e646..f0cced7 100644
+--- a/main/audio/audio_codec.h
++++ b/main/audio/audio_codec.h
+@@ -16,6 +16,7 @@
+ 
+ class AudioCodec {
+ public:
++    void SetAudioLevelCallback(std::function<void(float)> callback) { on_audio_level_ = callback; }
+     AudioCodec();
+     virtual ~AudioCodec();
+     
+@@ -40,6 +41,7 @@ public:
+     inline bool output_enabled() const { return output_enabled_; }
+ 
+ protected:
++    std::function<void(float)> on_audio_level_;
+     i2s_chan_handle_t tx_handle_ = nullptr;
+     i2s_chan_handle_t rx_handle_ = nullptr;
+ 

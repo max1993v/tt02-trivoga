@@ -1,0 +1,15 @@
+{
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "aikoder-s3-lcd",
+            "sdkconfig_append": [
+                "CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/16m.csv\"",
+                "CONFIG_SPIRAM_MODE_QUAD=y",
+                "CONFIG_SR_WN_WN9_SOPHIA_TTS=y",
+                "CONFIG_LANGUAGE_UK_UA=y"
+            ]
+        }
+    ]
+}
