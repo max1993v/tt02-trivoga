@@ -102,7 +102,7 @@ const char* NameOf(const std::string& id) {
 std::string Hm(time_t t) {
     struct tm tmv;
     localtime_r(&t, &tmv);
-    char b[8];
+    char b[24];
     snprintf(b, sizeof(b), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
     return b;
 }
@@ -112,7 +112,7 @@ bool ClockValid() { return time(nullptr) > 1700000000; }
 std::string Minutes(int64_t since_us) {
     int m = (int)((esp_timer_get_time() - since_us) / 60000000LL);
     if (m < 60) return std::to_string(m) + " хв";
-    char b[16];
+    char b[32];
     snprintf(b, sizeof(b), "%d год %02d хв", m / 60, m % 60);
     return b;
 }
