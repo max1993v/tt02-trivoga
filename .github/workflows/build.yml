@@ -23,10 +23,10 @@ jobs:
       - name: Generate Cyrillic LVGL fonts
         run: |
           RANGE=0x20-0x7E,0xB7,0x2019,0x2026,0x400-0x45F,0x490-0x491
-          npx -y lv_font_conv@1.5.3 --font fonts/Inter-Bold.otf -r $RANGE --size 24 --bpp 4 \
-            --format lvgl --no-compress --lv-include lvgl.h --lv-font-name font_ua_bold_24 -o font_ua_bold_24.c
-          npx -y lv_font_conv@1.5.3 --font fonts/Inter-Medium.otf -r $RANGE --size 16 --bpp 4 \
-            --format lvgl --no-compress --lv-include lvgl.h --lv-font-name font_ua_med_16 -o font_ua_med_16.c
+          npx -y lv_font_conv@1.5.3 --font fonts/Inter-Bold.otf -r $RANGE --size 18 --bpp 4 \
+            --format lvgl --no-compress --lv-include lvgl.h --lv-font-name font_ua_bold -o font_ua_bold.c
+          npx -y lv_font_conv@1.5.3 --font fonts/Inter-Medium.otf -r $RANGE --size 13 --bpp 4 \
+            --format lvgl --no-compress --lv-include lvgl.h --lv-font-name font_ua_med -o font_ua_med.c
           ls -la font_ua_*.c
       - uses: actions/upload-artifact@v4
         with:

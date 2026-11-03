@@ -16,15 +16,15 @@
 
 #define TAG "Alerts"
 
-LV_FONT_DECLARE(font_ua_bold_24);
-LV_FONT_DECLARE(font_ua_med_16);
+LV_FONT_DECLARE(font_ua_bold);
+LV_FONT_DECLARE(font_ua_med);
 
 static_assert(UA_REGION_COUNT == 25, "region count mismatch");
 
 namespace {
 
 constexpr int kPollSeconds = 20;
-constexpr int kHeaderH = 40;
+constexpr int kHeaderH = UA_MAP_Y;
 constexpr int64_t kStaleUs = 150LL * 1000 * 1000;
 constexpr int64_t kAllClearShowUs = 20LL * 1000 * 1000;
 constexpr int64_t kTestUs = 25LL * 1000 * 1000;
@@ -133,8 +133,9 @@ void AlertMonitor::Start(Display* display, std::function<void()> wake_cb) {
         sound_ = st.GetBool("sound", true);
         if (SlotOf(home_.c_str()) < 0) home_ = "kyiv_city";
     }
-    // TZ для годинника у футері (Київ, з переходом на літній час)
-    setenv("TZ", "EET-2EEST,M3.5.0/3,M10.5.0/4", 1);
+    // сервер xiaozhi вже виставляє годинник у місцевому часі (з урахуванням зсуву),
+    // тому тут без додаткового часового поясу
+    setenv("TZ", "UTC0", 1);
     tzset();
     xTaskCreate(TaskEntry, "alerts", 8192, this, 3, nullptr);
 }
@@ -326,7 +327,7 @@ void AlertMonitor::EnsureUi() {
     lv_obj_remove_flag(header_, LV_OBJ_FLAG_SCROLLABLE);
 
     title_ = lv_label_create(header_);
-    lv_obj_set_style_text_font(title_, &font_ua_bold_24, 0);
+    lv_obj_set_style_text_font(title_, &font_ua_bold, 0);
     lv_obj_set_style_text_color(title_, lv_color_white(), 0);
     lv_label_set_long_mode(title_, LV_LABEL_LONG_CLIP);
     lv_obj_set_width(title_, w - 12);
@@ -352,14 +353,14 @@ void AlertMonitor::EnsureUi() {
     lv_obj_set_pos(kyiv_dot_, (w - UA_MAP_W) / 2 + UA_KYIV_X - 4, kHeaderH + UA_KYIV_Y - 4);
 
     foot_left_ = lv_label_create(root_);
-    lv_obj_set_style_text_font(foot_left_, &font_ua_med_16, 0);
+    lv_obj_set_style_text_font(foot_left_, &font_ua_med, 0);
     lv_obj_set_style_text_color(foot_left_, lv_color_hex(0xE8EAED), 0);
-    lv_obj_align(foot_left_, LV_ALIGN_BOTTOM_LEFT, 6, -4);
+    lv_obj_align(foot_left_, LV_ALIGN_BOTTOM_LEFT, 16, -6);
 
     foot_right_ = lv_label_create(root_);
-    lv_obj_set_style_text_font(foot_right_, &font_ua_med_16, 0);
+    lv_obj_set_style_text_font(foot_right_, &font_ua_med, 0);
     lv_obj_set_style_text_color(foot_right_, lv_color_hex(0x9AA0A6), 0);
-    lv_obj_align(foot_right_, LV_ALIGN_BOTTOM_RIGHT, -6, -4);
+    lv_obj_align(foot_right_, LV_ALIGN_BOTTOM_RIGHT, -16, -6);
 
     lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
     tick_ = lv_timer_create(TickCb, 5000, this);
@@ -385,7 +386,19 @@ void AlertMonitor::RenderMap() {
         bool is_home = i == home_paint;
         lut[i] = stale ? c_stale : on ? (is_home ? c_home_alert : c_alert) : (is_home ? c_home : c_calm);
     }
-    for (int p = 0; p < UA_MAP_W * UA_MAP_H; p++) canvas_buf_[p] = lut[kUaMap[p]];
+    // регіони + підписи міст (біле AA-напис із темним контуром)
+    for (int p = 0; p < UA_MAP_W * UA_MAP_H; p++) {
+        uint16_t c = lut[kUaMap[p]];
+        uint8_t ao = kUaLabelO[p], at = kUaLabelA[p];
+        if (ao | at) {
+            int r = (c >> 11) & 0x1F, g = (c >> 5) & 0x3F, b = c & 0x1F;
+            int o = ao * 217 / 255;                       // контур ~85%
+            r = r * (255 - o) / 255; g = g * (255 - o) / 255; b = b * (255 - o) / 255;
+            r += (31 - r) * at / 255; g += (63 - g) * at / 255; b += (31 - b) * at / 255;
+            c = (uint16_t)((r << 11) | (g << 5) | b);
+        }
+        canvas_buf_[p] = c;
+    }
     lv_obj_invalidate(canvas_);
 
     bool city = alerts_[0] || (testing && home == 0);
@@ -409,14 +422,14 @@ void AlertMonitor::UpdateTexts() {
     lv_obj_set_style_bg_color(header_, lv_color_hex(bg), 0);
     lv_label_set_text(title_, title.c_str());
 
-    std::string left = HomeName();
+    std::string left = home_ == "kyiv_city" ? std::string("Київ") : HomeName();
     if ((home_alert || testing) && alarm_since_us_) left += " · " + Minutes(alarm_since_us_);
     lv_label_set_text(foot_left_, left.c_str());
 
     std::string right;
     if (have_data_) {
         int n = ActiveCount();
-        right = "тривога: " + std::to_string(n) + " обл.";
+        right = std::to_string(n) + " обл.";
         if (ClockValid()) right += " · " + Hm(time(nullptr));
     }
     lv_label_set_text(foot_right_, right.c_str());
