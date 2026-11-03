@@ -215,8 +215,33 @@ class AiKoderS3LcdBoard : public WifiBoard {
             [](const PropertyList& p) -> ReturnValue {
                 return AlertMonitor::GetInstance().SetHomeRegion(p["region"].value<std::string>());
             });
+        mcp.AddTool("self.clock.get_time",
+            "Поточний час і дата (Київ). Use when the user asks: скільки годин / котра година / який сьогодні день / яка дата.",
+            PropertyList(),
+            [](const PropertyList&) -> ReturnValue {
+                return AlertMonitor::GetInstance().TimeText();
+            });
+        mcp.AddTool("self.audio_speaker.change_volume",
+            "Зробити гучніше або тихіше відносно поточної гучності. Use for: гучніше / тихіше / голосніше / зроби тихіше. "
+            "delta: +10 for louder, -10 for quieter (bigger step if user says 'набагато'). Returns the new volume 0-100. "
+            "For an exact level (наприклад 'гучність 50') use self.audio_speaker.set_volume.",
+            PropertyList({Property("delta", kPropertyTypeInteger, -100, 100)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                int v = audio_codec_->output_volume() + p["delta"].value<int>();
+                if (v < 0) v = 0;
+                if (v > 100) v = 100;
+                audio_codec_->SetOutputVolume(v);
+                return v;
+            });
+        mcp.AddTool("self.audio_speaker.get_volume",
+            "Поточна гучність динаміка (0-100). Use when the user asks: яка гучність.",
+            PropertyList(),
+            [this](const PropertyList&) -> ReturnValue {
+                return audio_codec_->output_volume();
+            });
         mcp.AddTool("self.air_alert.test",
-            "Play a test air-alert (siren + red map for ~25 s, then all-clear sound).",
+            "Тест повітряної тривоги: сирена й червона мапа ~25 с, потім звук відбою. "
+            "Use when the user says: тест тривоги / тест повітряної тривоги / перевір сирену / тестова тривога.",
             PropertyList(),
             [](const PropertyList&) -> ReturnValue {
                 AlertMonitor::GetInstance().StartTest();

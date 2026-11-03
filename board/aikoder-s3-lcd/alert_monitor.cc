@@ -138,6 +138,40 @@ void AlertMonitor::Start(Display* display, std::function<void()> wake_cb) {
     setenv("TZ", "UTC0", 1);
     tzset();
     xTaskCreate(TaskEntry, "alerts", 8192, this, 3, nullptr);
+    xTaskCreate(UiTaskEntry, "alerts_ui", 4096, this, 2, nullptr);
+}
+
+void AlertMonitor::UiTaskEntry(void* arg) {
+    static_cast<AlertMonitor*>(arg)->UiLoop();
+    vTaskDelete(nullptr);
+}
+
+// Мапа — головний екран. Ховається лише коли потрібен системний екран
+// (налаштування Wi-Fi, код активації, оновлення, помилка) або користувач сховав її кліком.
+bool AlertMonitor::WantVisible() {
+    auto st = Application::GetInstance().GetDeviceState();
+    if (st == kDeviceStateWifiConfiguring || st == kDeviceStateActivating ||
+        st == kDeviceStateUpgrading || st == kDeviceStateFatalError || st == kDeviceStateAudioTesting) return false;
+    return !hidden_by_user_;
+}
+
+void AlertMonitor::UiLoop() {
+    vTaskDelay(pdMS_TO_TICKS(1500));   // даємо дисплею завершити SetupUI
+    int64_t last_refresh = 0;
+    int last_state = -1;
+    while (true) {
+        bool want = WantVisible();
+        int st = (int)Application::GetInstance().GetDeviceState();
+        int64_t now = esp_timer_get_time();
+        if (display_ && (want != visible_ || (visible_ && (now - last_refresh > 5000000LL || st != last_state)))) {
+            DisplayLockGuard lock(display_);
+            if (want != visible_) Show(want);
+            else { RenderMap(); UpdateTexts(); }
+            last_refresh = now;
+        }
+        last_state = st;
+        vTaskDelay(pdMS_TO_TICKS(400));
+    }
 }
 
 void AlertMonitor::TaskEntry(void* arg) {
@@ -264,7 +298,8 @@ void AlertMonitor::OnHomeAlarmStart(bool play_siren) {
     if (wake_cb_) wake_cb_();
     if (display_) {
         DisplayLockGuard lock(display_);
-        if (!visible_) { auto_shown_ = true; Show(true); }
+        hidden_by_user_ = false;
+        if (!visible_ && WantVisible()) Show(true);
     }
     if (sound_) {
         auto& app = Application::GetInstance();
@@ -278,7 +313,8 @@ void AlertMonitor::OnHomeAlarmEnd() {
     if (wake_cb_) wake_cb_();
     if (display_) {
         DisplayLockGuard lock(display_);
-        if (!visible_) { auto_shown_ = true; Show(true); }
+        hidden_by_user_ = false;
+        if (!visible_ && WantVisible()) Show(true);
     }
     if (sound_) {
         Application::GetInstance().PlaySound(std::string_view((const char*)kAllClearOgg, kAllClearOgg_len));
@@ -363,7 +399,6 @@ void AlertMonitor::EnsureUi() {
     lv_obj_align(foot_right_, LV_ALIGN_BOTTOM_RIGHT, -16, -6);
 
     lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
-    tick_ = lv_timer_create(TickCb, 5000, this);
 }
 
 void AlertMonitor::RenderMap() {
@@ -424,6 +459,11 @@ void AlertMonitor::UpdateTexts() {
 
     std::string left = home_ == "kyiv_city" ? std::string("Київ") : HomeName();
     if ((home_alert || testing) && alarm_since_us_) left += " · " + Minutes(alarm_since_us_);
+    auto dst = Application::GetInstance().GetDeviceState();
+    if (dst == kDeviceStateListening) left = "Слухаю…";
+    else if (dst == kDeviceStateSpeaking) left = "Говорю…";
+    else if (dst == kDeviceStateConnecting) left = "З'єднання…";
+    lv_obj_set_style_text_color(foot_left_, lv_color_hex(dst == kDeviceStateListening || dst == kDeviceStateSpeaking ? 0x8AB4F8 : 0xE8EAED), 0);
     lv_label_set_text(foot_left_, left.c_str());
 
     std::string right;
@@ -446,27 +486,14 @@ void AlertMonitor::Show(bool on) {
         lv_obj_move_foreground(root_);
     } else {
         lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
-        auto_shown_ = false;
     }
-}
-
-void AlertMonitor::TickCb(lv_timer_t* t) {
-    auto* self = static_cast<AlertMonitor*>(lv_timer_get_user_data(t));
-    if (!self->visible_) return;
-    int64_t now = esp_timer_get_time();
-    // автоматично показана мапа ховається після відбою / кінця тесту
-    if (self->auto_shown_ && !self->HomeAlert() && self->allclear_until_us_ < now) {
-        self->Show(false);
-        return;
-    }
-    self->RenderMap();
-    self->UpdateTexts();
 }
 
 void AlertMonitor::ToggleMap() {
     if (!display_) return;
     DisplayLockGuard lock(display_);
-    Show(!visible_);
+    hidden_by_user_ = visible_;      // клік: сховати мапу (показати асистента) / повернути мапу
+    Show(!visible_ && WantVisible());
 }
 
 void AlertMonitor::StartTest() {
@@ -476,8 +503,8 @@ void AlertMonitor::StartTest() {
     if (wake_cb_) wake_cb_();
     if (display_) {
         DisplayLockGuard lock(display_);
-        if (!visible_) { Show(true); }
-        auto_shown_ = true;
+        hidden_by_user_ = false;
+        if (!visible_) Show(true);
         RenderMap();
         UpdateTexts();
     }
@@ -533,4 +560,18 @@ bool AlertMonitor::SetHomeRegion(const std::string& id) {
         if (visible_) { RenderMap(); UpdateTexts(); }
     }
     return true;
+}
+
+std::string AlertMonitor::TimeText() {
+    if (!ClockValid()) return "Час ще не синхронізовано.";
+    static const char* kDays[] = {"неділя", "понеділок", "вівторок", "середа", "четвер", "пʼятниця", "субота"};
+    static const char* kMonths[] = {"січня", "лютого", "березня", "квітня", "травня", "червня",
+                                    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"};
+    time_t t = time(nullptr);
+    struct tm tmv;
+    localtime_r(&t, &tmv);
+    char b[96];
+    snprintf(b, sizeof(b), "Зараз %02d:%02d, %s, %d %s %d року (київський час).",
+             tmv.tm_hour, tmv.tm_min, kDays[tmv.tm_wday], tmv.tm_mday, kMonths[tmv.tm_mon], tmv.tm_year + 1900);
+    return b;
 }

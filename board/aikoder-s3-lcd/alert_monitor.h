@@ -34,6 +34,7 @@ public:
 
     // для голосового асистента (MCP)
     std::string StatusText();
+    std::string TimeText();
     void SetSoundEnabled(bool on);
     bool SoundEnabled() const { return sound_; }
     bool SetHomeRegion(const std::string& id);
@@ -56,7 +57,9 @@ private:
     void RenderMap();
     void UpdateTexts();
     void Show(bool on);
-    static void TickCb(lv_timer_t* t);
+    static void UiTaskEntry(void* arg);
+    void UiLoop();
+    bool WantVisible();
 
     int HomeIndex() const;     // індекс у бітмапі (1..N) або 0 для kyiv_city
     bool HomeAlert() const;
@@ -76,7 +79,7 @@ private:
     std::string home_ = "kyiv_city";
     bool sound_ = true;
     std::atomic<bool> visible_{false};
-    bool auto_shown_ = false;      // показано автоматично через тривогу
+    std::atomic<bool> hidden_by_user_{false};
     std::atomic<int64_t> test_until_us_{0};
     int src_idx_ = 0;
     bool use_http_ = false;
