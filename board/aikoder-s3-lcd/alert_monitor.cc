@@ -492,7 +492,7 @@ void AlertMonitor::Show(bool on) {
 void AlertMonitor::ToggleMap() {
     if (!display_) return;
     DisplayLockGuard lock(display_);
-    hidden_by_user_ = visible_;      // клік: сховати мапу (показати асистента) / повернути мапу
+    hidden_by_user_ = visible_.load();      // клік: сховати мапу (показати асистента) / повернути мапу
     Show(!visible_ && WantVisible());
 }
 
