@@ -28,7 +28,7 @@ public:
 
     void Start(Display* display, std::function<void()> wake_cb);
 
-    enum { kModeMap = 0, kModeClock = 1, kModeFace = 2 };
+    enum { kModeMap = 0, kModeClock = 1, kModeFace = 2, kModeAuto = 3 };   // auto: мапа ↔ годинник кожні 10 с
     void CycleMode();          // клік кнопки живлення: мапа → годинник → обличчя
     void SetMode(int mode, bool save = true);
     bool SetModeByName(const std::string& name);
@@ -84,7 +84,7 @@ private:
     std::string home_ = "kyiv_city";
     bool sound_ = true;
     std::atomic<bool> visible_{false};
-    std::atomic<int> mode_{kModeMap};
+    std::atomic<int> mode_{kModeAuto};
     int shown_ = -1;
     std::atomic<int64_t> force_map_until_us_{0};
     bool city_seen_ = false;

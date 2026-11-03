@@ -30,6 +30,7 @@ constexpr int kHeaderH = UA_MAP_Y;
 constexpr int64_t kStaleUs = 150LL * 1000 * 1000;
 constexpr int64_t kAllClearShowUs = 20LL * 1000 * 1000;
 constexpr int64_t kTestUs = 25LL * 1000 * 1000;
+constexpr int64_t kRotateUs = 10LL * 1000 * 1000;
 constexpr int64_t kForceMapUs = 90LL * 1000 * 1000;
 
 // повні назви (у тому ж порядку, що kUaRegionIds)
@@ -134,8 +135,8 @@ void AlertMonitor::Start(Display* display, std::function<void()> wake_cb) {
         Settings st("alerts", false);
         home_ = st.GetString("home", "kyiv_city");
         sound_ = st.GetBool("sound", true);
-        mode_ = st.GetInt("screen", kModeMap);
-        if (mode_ < kModeMap || mode_ > kModeFace) mode_ = kModeMap;
+        mode_ = st.GetInt("screen", kModeAuto);
+        if (mode_ < kModeMap || mode_ > kModeAuto) mode_ = kModeAuto;
         if (SlotOf(home_.c_str()) < 0) home_ = "kyiv_city";
     }
     // сервер xiaozhi вже виставляє годинник у місцевому часі (з урахуванням зсуву),
@@ -163,6 +164,7 @@ int AlertMonitor::Target() {
     // далі — той екран, який вибрав користувач (на годиннику тривогу видно червоною плашкою)
     if (force_map_until_us_ > now || test_until_us_ > now) return 0;
     int m = mode_;
+    if (m == kModeAuto) return (now / kRotateUs) % 2 ? 1 : 0;   // по черзі: мапа → годинник
     return m == kModeFace ? -1 : m;
 }
 
@@ -558,7 +560,7 @@ void AlertMonitor::Show(int what) {
 }
 
 void AlertMonitor::SetMode(int mode, bool save) {
-    if (mode < kModeMap || mode > kModeFace) return;
+    if (mode < kModeMap || mode > kModeAuto) return;
     mode_ = mode;
     force_map_until_us_ = 0;      // явний вибір користувача важливіший за автопоказ мапи
     if (save) {
@@ -573,6 +575,9 @@ void AlertMonitor::SetMode(int mode, bool save) {
 
 bool AlertMonitor::SetModeByName(const std::string& name) {
     std::string n = Lower(name.c_str());
+    if (n.find("auto") != std::string::npos || n.find("черз") != std::string::npos || n.find("чергу") != std::string::npos ||
+        n.find("rotat") != std::string::npos || n.find("обидва") != std::string::npos || n.find("both") != std::string::npos ||
+        n.find("перемика") != std::string::npos) { SetMode(kModeAuto); return true; }
     if (n.find("map") != std::string::npos || n.find("мап") != std::string::npos || n.find("карт") != std::string::npos ||
         n.find("тривог") != std::string::npos) { SetMode(kModeMap); return true; }
     if (n.find("clock") != std::string::npos || n.find("time") != std::string::npos || n.find("годин") != std::string::npos ||
@@ -584,11 +589,11 @@ bool AlertMonitor::SetModeByName(const std::string& name) {
 
 const char* AlertMonitor::ModeName() const {
     int m = mode_;
-    return m == kModeMap ? "map" : m == kModeClock ? "clock" : "face";
+    return m == kModeMap ? "map" : m == kModeClock ? "clock" : m == kModeAuto ? "auto (мапа і годинник по черзі)" : "face";
 }
 
 void AlertMonitor::CycleMode() {
-    SetMode((mode_ + 1) % 3);       // мапа → годинник → обличчя → мапа
+    SetMode((mode_ + 1) % 4);       // мапа → годинник → обличчя → по черзі → мапа
 }
 
 void AlertMonitor::StartTest() {

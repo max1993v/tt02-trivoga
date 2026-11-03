@@ -195,13 +195,15 @@ class AiKoderS3LcdBoard : public WifiBoard {
         mcp.AddTool("self.display.show",
             "Змінити, що показано на екрані пристрою. ALWAYS call this when the user asks to show something on the screen: "
             "'покажи годинник' / 'покажи час' -> mode=clock; 'покажи мапу' / 'покажи мапу тривог' / 'карта тривог' -> mode=map; "
-            "'покажи обличчя' / 'покажи себе' / 'прибери мапу' -> mode=face. The choice is remembered after reboot. "
+            "'покажи обличчя' / 'покажи себе' / 'прибери мапу' -> mode=face; "
+            "'показуй по черзі' / 'чергуй мапу і годинник' / 'автоматично' -> mode=auto (map and clock alternate every 10 s). "
+            "The choice is remembered after reboot. "
             "During an air alert in the home region the map is shown automatically.",
             PropertyList({Property("mode", kPropertyTypeString)}),
             [](const PropertyList& p) -> ReturnValue {
                 auto& m = AlertMonitor::GetInstance();
                 if (!m.SetModeByName(p["mode"].value<std::string>()))
-                    return std::string("Невідомий режим. Доступні: map, clock, face.");
+                    return std::string("Невідомий режим. Доступні: map, clock, face, auto.");
                 return std::string("Показано: ") + m.ModeName();
             });
         mcp.AddTool("self.air_alert.set_sound",
