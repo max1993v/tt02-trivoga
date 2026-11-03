@@ -167,7 +167,7 @@ class AiKoderS3LcdBoard : public WifiBoard {
         // Клік живлення — показати/сховати мапу тривог; подвійний клік — тестова тривога
         power_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
-            AlertMonitor::GetInstance().ToggleMap();
+            AlertMonitor::GetInstance().CycleMode();
         });
         power_button_.OnDoubleClick([this]() {
             power_save_timer_->WakeUp();
@@ -192,13 +192,17 @@ class AiKoderS3LcdBoard : public WifiBoard {
             [](const PropertyList&) -> ReturnValue {
                 return AlertMonitor::GetInstance().StatusText();
             });
-        mcp.AddTool("self.air_alert.show_map",
-            "Show or hide the air-alert map of Ukraine on the device screen.",
-            PropertyList({Property("visible", kPropertyTypeBoolean)}),
+        mcp.AddTool("self.display.show",
+            "Змінити, що показано на екрані пристрою. ALWAYS call this when the user asks to show something on the screen: "
+            "'покажи годинник' / 'покажи час' -> mode=clock; 'покажи мапу' / 'покажи мапу тривог' / 'карта тривог' -> mode=map; "
+            "'покажи обличчя' / 'покажи себе' / 'прибери мапу' -> mode=face. The choice is remembered after reboot. "
+            "During an air alert in the home region the map is shown automatically.",
+            PropertyList({Property("mode", kPropertyTypeString)}),
             [](const PropertyList& p) -> ReturnValue {
                 auto& m = AlertMonitor::GetInstance();
-                if (p["visible"].value<bool>() != m.IsMapVisible()) m.ToggleMap();
-                return true;
+                if (!m.SetModeByName(p["mode"].value<std::string>()))
+                    return std::string("Невідомий режим. Доступні: map, clock, face.");
+                return std::string("Показано: ") + m.ModeName();
             });
         mcp.AddTool("self.air_alert.set_sound",
             "Enable or disable the siren / all-clear sounds for air alerts.",

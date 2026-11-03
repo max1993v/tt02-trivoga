@@ -18,6 +18,8 @@
 
 LV_FONT_DECLARE(font_ua_bold);
 LV_FONT_DECLARE(font_ua_med);
+LV_FONT_DECLARE(font_ua_date);
+LV_FONT_DECLARE(font_ua_clock);
 
 static_assert(UA_REGION_COUNT == 25, "region count mismatch");
 
@@ -131,6 +133,8 @@ void AlertMonitor::Start(Display* display, std::function<void()> wake_cb) {
         Settings st("alerts", false);
         home_ = st.GetString("home", "kyiv_city");
         sound_ = st.GetBool("sound", true);
+        mode_ = st.GetInt("screen", kModeMap);
+        if (mode_ < kModeMap || mode_ > kModeFace) mode_ = kModeMap;
         if (SlotOf(home_.c_str()) < 0) home_ = "kyiv_city";
     }
     // сервер xiaozhi вже виставляє годинник у місцевому часі (з урахуванням зсуву),
@@ -146,13 +150,23 @@ void AlertMonitor::UiTaskEntry(void* arg) {
     vTaskDelete(nullptr);
 }
 
-// Мапа — головний екран. Ховається лише коли потрібен системний екран
-// (налаштування Wi-Fi, код активації, оновлення, помилка) або користувач сховав її кліком.
-bool AlertMonitor::WantVisible() {
+// Що показувати: -1 — нічого (екран асистента), 0 — мапа, 1 — годинник.
+// Під час тривоги / відбою / тесту завжди мапа; системні екрани (Wi-Fi, код активації,
+// оновлення, помилка) не перекриваємо.
+int AlertMonitor::Target() {
     auto st = Application::GetInstance().GetDeviceState();
     if (st == kDeviceStateWifiConfiguring || st == kDeviceStateActivating ||
-        st == kDeviceStateUpgrading || st == kDeviceStateFatalError || st == kDeviceStateAudioTesting) return false;
-    return !hidden_by_user_;
+        st == kDeviceStateUpgrading || st == kDeviceStateFatalError || st == kDeviceStateAudioTesting) return -1;
+    if (HomeAlert() || allclear_until_us_ > esp_timer_get_time()) return 0;
+    int m = mode_;
+    return m == kModeFace ? -1 : m;
+}
+
+void AlertMonitor::ApplyTarget() {
+    int t = Target();
+    if (t != shown_) Show(t);
+    else if (shown_ == 0) { RenderMap(); UpdateTexts(); }
+    else if (shown_ == 1) UpdateClock();
 }
 
 void AlertMonitor::UiLoop() {
@@ -160,17 +174,17 @@ void AlertMonitor::UiLoop() {
     int64_t last_refresh = 0;
     int last_state = -1;
     while (true) {
-        bool want = WantVisible();
+        int target = Target();
         int st = (int)Application::GetInstance().GetDeviceState();
         int64_t now = esp_timer_get_time();
-        if (display_ && (want != visible_ || (visible_ && (now - last_refresh > 5000000LL || st != last_state)))) {
+        int64_t period = shown_ == 1 ? 1000000LL : 5000000LL;
+        if (display_ && (target != shown_ || (shown_ >= 0 && (now - last_refresh > period || st != last_state)))) {
             DisplayLockGuard lock(display_);
-            if (want != visible_) Show(want);
-            else { RenderMap(); UpdateTexts(); }
+            ApplyTarget();
             last_refresh = now;
         }
         last_state = st;
-        vTaskDelay(pdMS_TO_TICKS(400));
+        vTaskDelay(pdMS_TO_TICKS(300));
     }
 }
 
@@ -287,8 +301,9 @@ void AlertMonitor::Apply(const bool a[UA_REGION_COUNT + 1], const std::string& s
     }
     if (display_) {
         DisplayLockGuard lock(display_);
-        if (visible_) RenderMap();
+        if (shown_ == 0) RenderMap();
         UpdateTexts();
+        if (shown_ == 1) UpdateClock();
     }
 }
 
@@ -298,8 +313,7 @@ void AlertMonitor::OnHomeAlarmStart(bool play_siren) {
     if (wake_cb_) wake_cb_();
     if (display_) {
         DisplayLockGuard lock(display_);
-        hidden_by_user_ = false;
-        if (!visible_ && WantVisible()) Show(true);
+        ApplyTarget();
     }
     if (sound_) {
         auto& app = Application::GetInstance();
@@ -313,8 +327,7 @@ void AlertMonitor::OnHomeAlarmEnd() {
     if (wake_cb_) wake_cb_();
     if (display_) {
         DisplayLockGuard lock(display_);
-        hidden_by_user_ = false;
-        if (!visible_ && WantVisible()) Show(true);
+        ApplyTarget();
     }
     if (sound_) {
         Application::GetInstance().PlaySound(std::string_view((const char*)kAllClearOgg, kAllClearOgg_len));
@@ -399,6 +412,43 @@ void AlertMonitor::EnsureUi() {
     lv_obj_align(foot_right_, LV_ALIGN_BOTTOM_RIGHT, -16, -6);
 
     lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
+
+    // ---- годинник ----
+    clock_root_ = lv_obj_create(layer);
+    lv_obj_remove_style_all(clock_root_);
+    lv_obj_set_size(clock_root_, w, h);
+    lv_obj_set_style_bg_color(clock_root_, lv_color_hex(0x0F1115), 0);
+    lv_obj_set_style_bg_opa(clock_root_, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(clock_root_, LV_OBJ_FLAG_SCROLLABLE);
+
+    clk_date_ = lv_label_create(clock_root_);
+    lv_obj_set_style_text_font(clk_date_, &font_ua_date, 0);
+    lv_obj_set_style_text_color(clk_date_, lv_color_hex(0x9AA0A6), 0);
+    lv_obj_align(clk_date_, LV_ALIGN_TOP_MID, 0, 22);
+
+    clk_time_ = lv_label_create(clock_root_);
+    lv_obj_set_style_text_font(clk_time_, &font_ua_clock, 0);
+    lv_obj_set_style_text_color(clk_time_, lv_color_white(), 0);
+    lv_obj_align(clk_time_, LV_ALIGN_CENTER, 0, -10);
+
+    clk_pill_ = lv_obj_create(clock_root_);
+    lv_obj_remove_style_all(clk_pill_);
+    lv_obj_set_size(clk_pill_, LV_SIZE_CONTENT, 32);
+    lv_obj_set_style_radius(clk_pill_, 16, 0);
+    lv_obj_set_style_bg_opa(clk_pill_, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(clk_pill_, 14, 0);
+    lv_obj_remove_flag(clk_pill_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(clk_pill_, LV_ALIGN_BOTTOM_MID, 0, -40);
+    clk_status_ = lv_label_create(clk_pill_);
+    lv_obj_set_style_text_font(clk_status_, &font_ua_date, 0);
+    lv_obj_set_style_text_color(clk_status_, lv_color_white(), 0);
+    lv_obj_center(clk_status_);
+
+    clk_foot_ = lv_label_create(clock_root_);
+    lv_obj_set_style_text_font(clk_foot_, &font_ua_med, 0);
+    lv_obj_set_style_text_color(clk_foot_, lv_color_hex(0x8AB4F8), 0);
+    lv_obj_align(clk_foot_, LV_ALIGN_BOTTOM_MID, 0, -14);
+    lv_obj_add_flag(clock_root_, LV_OBJ_FLAG_HIDDEN);
 }
 
 void AlertMonitor::RenderMap() {
@@ -475,25 +525,59 @@ void AlertMonitor::UpdateTexts() {
     lv_label_set_text(foot_right_, right.c_str());
 }
 
-void AlertMonitor::Show(bool on) {
+void AlertMonitor::Show(int what) {
     EnsureUi();
-    if (!root_) return;
-    visible_ = on;
-    if (on) {
+    if (!root_ || !clock_root_) return;
+    shown_ = what;
+    visible_ = what == 0;
+    if (what == 0) {
         RenderMap();
         UpdateTexts();
+        lv_obj_add_flag(clock_root_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(root_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(root_);
+    } else if (what == 1) {
+        UpdateClock();
+        lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(clock_root_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(clock_root_);
     } else {
         lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(clock_root_, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
-void AlertMonitor::ToggleMap() {
-    if (!display_) return;
-    DisplayLockGuard lock(display_);
-    hidden_by_user_ = visible_.load();      // клік: сховати мапу (показати асистента) / повернути мапу
-    Show(!visible_ && WantVisible());
+void AlertMonitor::SetMode(int mode, bool save) {
+    if (mode < kModeMap || mode > kModeFace) return;
+    mode_ = mode;
+    if (save) {
+        Settings st("alerts", true);
+        st.SetInt("screen", mode);
+    }
+    if (display_) {
+        DisplayLockGuard lock(display_);
+        ApplyTarget();
+    }
+}
+
+bool AlertMonitor::SetModeByName(const std::string& name) {
+    std::string n = Lower(name.c_str());
+    if (n.find("map") != std::string::npos || n.find("мап") != std::string::npos || n.find("карт") != std::string::npos ||
+        n.find("тривог") != std::string::npos) { SetMode(kModeMap); return true; }
+    if (n.find("clock") != std::string::npos || n.find("time") != std::string::npos || n.find("годин") != std::string::npos ||
+        n.find("час") != std::string::npos) { SetMode(kModeClock); return true; }
+    if (n.find("face") != std::string::npos || n.find("облич") != std::string::npos || n.find("робот") != std::string::npos ||
+        n.find("assistant") != std::string::npos || n.find("асистент") != std::string::npos) { SetMode(kModeFace); return true; }
+    return false;
+}
+
+const char* AlertMonitor::ModeName() const {
+    int m = mode_;
+    return m == kModeMap ? "map" : m == kModeClock ? "clock" : "face";
+}
+
+void AlertMonitor::CycleMode() {
+    SetMode((mode_ + 1) % 3);       // мапа → годинник → обличчя → мапа
 }
 
 void AlertMonitor::StartTest() {
@@ -503,10 +587,7 @@ void AlertMonitor::StartTest() {
     if (wake_cb_) wake_cb_();
     if (display_) {
         DisplayLockGuard lock(display_);
-        hidden_by_user_ = false;
-        if (!visible_) Show(true);
-        RenderMap();
-        UpdateTexts();
+        ApplyTarget();
     }
     Application::GetInstance().PlaySound(std::string_view((const char*)kSirenOgg, kSirenOgg_len));
     // після тесту — звук відбою
@@ -517,7 +598,7 @@ void AlertMonitor::StartTest() {
         Application::GetInstance().PlaySound(std::string_view((const char*)kAllClearOgg, kAllClearOgg_len));
         if (self->display_) {
             DisplayLockGuard lock(self->display_);
-            if (self->visible_) { self->RenderMap(); self->UpdateTexts(); }
+            self->ApplyTarget();
         }
         vTaskDelete(nullptr);
     }, "alert_test", 3072, this, 2, nullptr);
@@ -557,7 +638,7 @@ bool AlertMonitor::SetHomeRegion(const std::string& id) {
     st.SetString("home", home_);
     if (display_) {
         DisplayLockGuard lock(display_);
-        if (visible_) { RenderMap(); UpdateTexts(); }
+        ApplyTarget();
     }
     return true;
 }
@@ -574,4 +655,50 @@ std::string AlertMonitor::TimeText() {
     snprintf(b, sizeof(b), "Зараз %02d:%02d, %s, %d %s %d року (київський час).",
              tmv.tm_hour, tmv.tm_min, kDays[tmv.tm_wday], tmv.tm_mday, kMonths[tmv.tm_mon], tmv.tm_year + 1900);
     return b;
+}
+
+void AlertMonitor::UpdateClock() {
+    if (!clock_root_) return;
+    static const char* kDays[] = {"неділя", "понеділок", "вівторок", "середа", "четвер", "пʼятниця", "субота"};
+    static const char* kMonths[] = {"січня", "лютого", "березня", "квітня", "травня", "червня",
+                                    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"};
+    if (ClockValid()) {
+        time_t t = time(nullptr);
+        struct tm tmv;
+        localtime_r(&t, &tmv);
+        char b[64];
+        snprintf(b, sizeof(b), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
+        lv_label_set_text(clk_time_, b);
+        snprintf(b, sizeof(b), "%s, %d %s", kDays[tmv.tm_wday], tmv.tm_mday, kMonths[tmv.tm_mon]);
+        lv_label_set_text(clk_date_, b);
+    } else {
+        lv_label_set_text(clk_time_, "--:--");
+        lv_label_set_text(clk_date_, "синхронізація часу…");
+    }
+
+    int64_t now = esp_timer_get_time();
+    bool stale = !have_data_ || now - last_ok_us_ > kStaleUs;
+    std::string place = home_ == "kyiv_city" ? std::string("Київ") : HomeName();
+    uint32_t bg;
+    std::string st;
+    if (stale) { bg = 0x5C4A12; st = have_data_ ? "немає звʼязку" : "завантаження…"; }
+    else if (HomeAlert()) { bg = 0xC62828; st = "ТРИВОГА · " + place + " · " + Minutes(alarm_since_us_); }
+    else { bg = 0x1E5C34; st = "тривоги немає · " + place; }
+    lv_obj_set_style_bg_color(clk_pill_, lv_color_hex(bg), 0);
+    lv_label_set_text(clk_status_, st.c_str());
+
+    auto dst = Application::GetInstance().GetDeviceState();
+    const char* foot = "";
+    if (dst == kDeviceStateListening) foot = "Слухаю…";
+    else if (dst == kDeviceStateSpeaking) foot = "Говорю…";
+    else if (dst == kDeviceStateConnecting) foot = "Зʼєднання…";
+    else if (have_data_ && !stale) {
+        static char b[48];
+        snprintf(b, sizeof(b), "тривога в %d обл.", ActiveCount());
+        lv_obj_set_style_text_color(clk_foot_, lv_color_hex(0x9AA0A6), 0);
+        lv_label_set_text(clk_foot_, b);
+        return;
+    }
+    lv_obj_set_style_text_color(clk_foot_, lv_color_hex(0x8AB4F8), 0);
+    lv_label_set_text(clk_foot_, foot);
 }

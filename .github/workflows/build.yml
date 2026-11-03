@@ -27,6 +27,10 @@ jobs:
             --format lvgl --no-compress --lv-include lvgl.h --lv-font-name font_ua_bold -o font_ua_bold.c
           npx -y lv_font_conv@1.5.3 --font fonts/Inter-Medium.otf -r $RANGE --size 13 --bpp 4 \
             --format lvgl --no-compress --lv-include lvgl.h --lv-font-name font_ua_med -o font_ua_med.c
+          npx -y lv_font_conv@1.5.3 --font fonts/Inter-Medium.otf -r $RANGE --size 17 --bpp 4 \
+            --format lvgl --no-compress --lv-include lvgl.h --lv-font-name font_ua_date -o font_ua_date.c
+          npx -y lv_font_conv@1.5.3 --font fonts/Inter-Bold.otf -r 0x2D,0x30-0x3A --size 84 --bpp 4 \
+            --format lvgl --no-compress --lv-include lvgl.h --lv-font-name font_ua_clock -o font_ua_clock.c
           ls -la font_ua_*.c
       - uses: actions/upload-artifact@v4
         with:

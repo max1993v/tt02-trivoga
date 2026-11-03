@@ -28,9 +28,12 @@ public:
 
     void Start(Display* display, std::function<void()> wake_cb);
 
-    void ToggleMap();          // клік кнопки живлення
+    enum { kModeMap = 0, kModeClock = 1, kModeFace = 2 };
+    void CycleMode();          // клік кнопки живлення: мапа → годинник → обличчя
+    void SetMode(int mode, bool save = true);
+    bool SetModeByName(const std::string& name);
+    const char* ModeName() const;
     void StartTest();          // подвійний клік: тестова тривога ~25 с
-    bool IsMapVisible() const { return visible_; }
 
     // для голосового асистента (MCP)
     std::string StatusText();
@@ -56,10 +59,12 @@ private:
     void EnsureUi();
     void RenderMap();
     void UpdateTexts();
-    void Show(bool on);
+    void Show(int what);
+    int Target();
+    void ApplyTarget();
+    void UpdateClock();
     static void UiTaskEntry(void* arg);
     void UiLoop();
-    bool WantVisible();
 
     int HomeIndex() const;     // індекс у бітмапі (1..N) або 0 для kyiv_city
     bool HomeAlert() const;
@@ -79,7 +84,8 @@ private:
     std::string home_ = "kyiv_city";
     bool sound_ = true;
     std::atomic<bool> visible_{false};
-    std::atomic<bool> hidden_by_user_{false};
+    std::atomic<int> mode_{kModeMap};
+    int shown_ = -1;
     std::atomic<int64_t> test_until_us_{0};
     int src_idx_ = 0;
     bool use_http_ = false;
@@ -92,7 +98,12 @@ private:
     lv_obj_t* kyiv_dot_ = nullptr;
     lv_obj_t* foot_left_ = nullptr;
     lv_obj_t* foot_right_ = nullptr;
-    lv_timer_t* tick_ = nullptr;
+    lv_obj_t* clock_root_ = nullptr;
+    lv_obj_t* clk_time_ = nullptr;
+    lv_obj_t* clk_date_ = nullptr;
+    lv_obj_t* clk_pill_ = nullptr;
+    lv_obj_t* clk_status_ = nullptr;
+    lv_obj_t* clk_foot_ = nullptr;
     uint16_t* canvas_buf_ = nullptr;
 };
 
