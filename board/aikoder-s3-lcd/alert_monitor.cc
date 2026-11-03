@@ -30,6 +30,7 @@ constexpr int kHeaderH = UA_MAP_Y;
 constexpr int64_t kStaleUs = 150LL * 1000 * 1000;
 constexpr int64_t kAllClearShowUs = 20LL * 1000 * 1000;
 constexpr int64_t kTestUs = 25LL * 1000 * 1000;
+constexpr int64_t kForceMapUs = 90LL * 1000 * 1000;
 
 // повні назви (у тому ж порядку, що kUaRegionIds)
 struct RegionName { const char* id; const char* name; };
@@ -157,7 +158,10 @@ int AlertMonitor::Target() {
     auto st = Application::GetInstance().GetDeviceState();
     if (st == kDeviceStateWifiConfiguring || st == kDeviceStateActivating ||
         st == kDeviceStateUpgrading || st == kDeviceStateFatalError || st == kDeviceStateAudioTesting) return -1;
-    if (HomeAlert() || allclear_until_us_ > esp_timer_get_time()) return 0;
+    int64_t now = esp_timer_get_time();
+    // мапа примусово лише на початку тривоги (90 с), на відбої (20 с) і під час тесту;
+    // далі — той екран, який вибрав користувач (на годиннику тривогу видно червоною плашкою)
+    if (force_map_until_us_ > now || test_until_us_ > now) return 0;
     int m = mode_;
     return m == kModeFace ? -1 : m;
 }
@@ -249,6 +253,7 @@ bool AlertMonitor::Fetch(bool alerts[UA_REGION_COUNT + 1], std::string& src) {
                 cJSON* states = cJSON_GetObjectItem(root, "states");
                 if (!cJSON_IsObject(states)) states = root;
                 int known = 0;
+                bool city_seen = false;
                 cJSON* item = nullptr;
                 cJSON_ArrayForEach(item, states) {
                     if (!cJSON_IsObject(item) || !item->string) continue;
@@ -258,10 +263,12 @@ bool AlertMonitor::Fetch(bool alerts[UA_REGION_COUNT + 1], std::string& src) {
                     if (!v) continue;
                     known++;
                     int slot = SlotOf(RegionIdOf(item->string));
+                    if (slot == 0) city_seen = true;
                     if (slot >= 0 && cJSON_IsTrue(v)) alerts[slot] = true;
                 }
                 cJSON_Delete(root);
                 if (known >= 20) {
+                    city_seen_ = city_seen;
                     src = std::string("ubilling") + (*s ? std::string(" · ") + s : "");
                     return true;
                 }
@@ -309,6 +316,7 @@ void AlertMonitor::Apply(const bool a[UA_REGION_COUNT + 1], const std::string& s
 
 void AlertMonitor::OnHomeAlarmStart(bool play_siren) {
     alarm_since_us_ = esp_timer_get_time();
+    force_map_until_us_ = alarm_since_us_ + kForceMapUs;
     allclear_until_us_ = 0;
     if (wake_cb_) wake_cb_();
     if (display_) {
@@ -324,6 +332,7 @@ void AlertMonitor::OnHomeAlarmStart(bool play_siren) {
 
 void AlertMonitor::OnHomeAlarmEnd() {
     allclear_until_us_ = esp_timer_get_time() + kAllClearShowUs;
+    force_map_until_us_ = allclear_until_us_;
     if (wake_cb_) wake_cb_();
     if (display_) {
         DisplayLockGuard lock(display_);
@@ -341,7 +350,8 @@ bool AlertMonitor::HomeAlert() const {
     int i = HomeIndex();
     if (i < 0) return false;
     // м. Київ: тривога в місті (якщо джерело дає місто окремо) або в Київській області
-    if (i == 0) return alerts_[0] || alerts_[SlotOf("kyiv")];
+    // м. Київ — окремо від області (як у «Вітальні»); область — лише якщо джерело не дає місто
+    if (i == 0) return city_seen_ ? alerts_[0] : (alerts_[0] || alerts_[SlotOf("kyiv")]);
     return alerts_[i];
 }
 
@@ -550,6 +560,7 @@ void AlertMonitor::Show(int what) {
 void AlertMonitor::SetMode(int mode, bool save) {
     if (mode < kModeMap || mode > kModeFace) return;
     mode_ = mode;
+    force_map_until_us_ = 0;      // явний вибір користувача важливіший за автопоказ мапи
     if (save) {
         Settings st("alerts", true);
         st.SetInt("screen", mode);
