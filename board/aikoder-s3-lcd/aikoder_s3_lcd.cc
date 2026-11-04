@@ -189,6 +189,7 @@ class AiKoderS3LcdBoard : public WifiBoard {
 
     void InitializeAlerts() {
         AlertMonitor::GetInstance().Start(display_, [this]() { power_save_timer_->WakeUp(); });
+        RadioPlayer::GetInstance().Init();
 
         auto& mcp = McpServer::GetInstance();
         mcp.AddTool("self.air_alert.get_status",

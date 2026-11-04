@@ -165,7 +165,7 @@ std::string RadioPlayer::Play(const std::string& query, bool genre) {
     }
     generation_++;
     active_ = true;
-    resume_armed_ = true;
+    ArmResume();
     EnsureTask();
     ESP_LOGI(TAG, "request '%s' genre=%d", q.c_str(), genre);
     if (q.empty()) return "Вмикаю радіо. Відповідай одним коротким реченням.";
@@ -213,12 +213,10 @@ void RadioPlayer::Loop() {
 
     auto& app = Application::GetInstance();
     int failures = 0;
-    bool saw_speaking = false;
 
     while (true) {
         if (!active_) {
             failures = 0;
-            saw_speaking = false;
             vTaskDelay(pdMS_TO_TICKS(300));
             continue;
         }
@@ -258,25 +256,23 @@ void RadioPlayer::Loop() {
         auto state = app.GetDeviceState();
         if (state != kDeviceStateIdle) {
             // Розмова: музика на паузі. Повертаємо її лише після того, як асистент ВИКОНАВ команду
-            // (був виклик інструмента) і договорив відповідь. Привітання після слова-активації
-            // та звичайні запитання розмову не обривають.
-            if (resume_armed_) {
-                if (state == kDeviceStateSpeaking) saw_speaking = true;
-                if (state == kDeviceStateListening && saw_speaking) {
-                    resume_armed_ = false;
-                    saw_speaking = false;
-                    vTaskDelay(pdMS_TO_TICKS(500));
-                    if (active_ && app.GetDeviceState() == kDeviceStateListening) {
-                        ESP_LOGI(TAG, "command done, closing conversation to resume radio");
-                        app.ToggleChatState();
-                    }
+            // (виклик інструмента) і договорив відповідь (подія Speaking → Listening з колбека стану).
+            // Привітання після слова-активації та звичайні запитання розмову не обривають.
+            if (resume_armed_ && state == kDeviceStateListening &&
+                (reply_done_ || esp_timer_get_time() - arm_time_us_ > 12LL * 1000 * 1000)) {
+                resume_armed_ = false;
+                reply_done_ = false;
+                vTaskDelay(pdMS_TO_TICKS(400));
+                if (active_ && app.GetDeviceState() == kDeviceStateListening) {
+                    ESP_LOGI(TAG, "command done, closing conversation to resume radio");
+                    app.ToggleChatState();
                 }
             }
-            vTaskDelay(pdMS_TO_TICKS(200));
+            vTaskDelay(pdMS_TO_TICKS(150));
             continue;
         }
-        saw_speaking = false;
         resume_armed_ = false;
+        reply_done_ = false;
 
         Station st;
         {
@@ -456,7 +452,15 @@ RadioPlayer::Result RadioPlayer::StreamOnce(const Station& st, uint32_t gen) {
 
 void RadioPlayer::ArmResume() {
     if (!active_) return;
+    reply_done_ = false;
+    arm_time_us_ = esp_timer_get_time();
     resume_armed_ = true;
+}
+
+void RadioPlayer::Init() {
+    Application::GetInstance().GetStateMachine().AddStateChangeListener([this](DeviceState from, DeviceState to) {
+        if (resume_armed_ && from == kDeviceStateSpeaking && to == kDeviceStateListening) reply_done_ = true;
+    });
 }
 
 // Хук із McpServer: будь-яка команда асистенту (гучність, екран, станція…) під час радіо —

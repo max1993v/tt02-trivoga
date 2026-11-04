@@ -30,6 +30,18 @@ index e69337b..3503c45 100644
      config BOARD_TYPE_BREAD_COMPACT_WIFI
          bool "Bread Compact WiFi (面包板)"
          depends on IDF_TARGET_ESP32S3
+diff --git a/main/application.h b/main/application.h
+index 7ca7af4..e8664e0 100644
+--- a/main/application.h
++++ b/main/application.h
+@@ -64,6 +64,7 @@ public:
+     void Run();
+ 
+     DeviceState GetDeviceState() const { return state_machine_.GetState(); }
++    DeviceStateMachine& GetStateMachine() { return state_machine_; }
+     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
+     
+     /**
 diff --git a/main/audio/audio_codec.cc b/main/audio/audio_codec.cc
 index 03e2baa..c66f28c 100644
 --- a/main/audio/audio_codec.cc

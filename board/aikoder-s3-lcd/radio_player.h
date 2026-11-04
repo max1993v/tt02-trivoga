@@ -13,6 +13,7 @@
 class RadioPlayer {
 public:
     static RadioPlayer& GetInstance();
+    void Init();                         // підписка на зміни стану (викликати при старті плати)
 
     // Знайти станцію й увімкнути. Повертає текст для асистента (що саме грає або що не знайдено).
     std::string Play(const std::string& query, bool genre);
@@ -52,6 +53,8 @@ private:
     std::atomic<bool> active_{false};
     std::atomic<uint32_t> generation_{0};
     std::atomic<bool> resume_armed_{false};
+    std::atomic<bool> reply_done_{false};
+    std::atomic<int64_t> arm_time_us_{0};
     bool task_started_ = false;
     bool loaded_ = false;
 };
