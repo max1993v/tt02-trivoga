@@ -110,3 +110,19 @@ index 99db546..281e305 100644
      bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
      void ResetDecoder();
      void SetModelsList(srmodel_list_t* models_list);
+diff --git a/main/mcp_server.cc b/main/mcp_server.cc
+index 7cd7ba0..dfd5bbc 100644
+--- a/main/mcp_server.cc
++++ b/main/mcp_server.cc
+@@ -508,7 +508,11 @@ void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_o
+     ReplyResult(id, json);
+ }
+ 
++// Optional board hook: notified about every tool call (e.g. radio resumes music after a command)
++void OnMcpToolCalled(const std::string& tool_name) __attribute__((weak));
++
+ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments) {
++    if (OnMcpToolCalled) OnMcpToolCalled(tool_name);
+     auto tool_iter = std::find_if(tools_.begin(), tools_.end(), 
+                                  [&tool_name](const McpTool* tool) { 
+                                      return tool->name() == tool_name; 

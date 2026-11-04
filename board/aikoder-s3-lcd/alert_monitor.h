@@ -68,6 +68,7 @@ private:
 
     int HomeIndex() const;     // індекс у бітмапі (1..N) або 0 для kyiv_city
     bool HomeAlert() const;
+    bool OblastAlert() const;
     std::string HomeName() const;
     int ActiveCount() const;
 

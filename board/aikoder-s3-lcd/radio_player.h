@@ -19,6 +19,7 @@ public:
     void Stop();
     void Toggle();                       // вимкнути / увімкнути останню станцію
     bool IsActive() const { return active_; }
+    void ArmResume();                    // після виконаної команди повернути музику
     std::string NowPlaying();            // назва станції / «пошук…» / помилка, або ""
 
 private:
@@ -50,6 +51,7 @@ private:
     Station station_;
     std::atomic<bool> active_{false};
     std::atomic<uint32_t> generation_{0};
+    std::atomic<bool> resume_armed_{false};
     bool task_started_ = false;
     bool loaded_ = false;
 };

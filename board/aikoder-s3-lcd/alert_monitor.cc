@@ -347,6 +347,12 @@ void AlertMonitor::OnHomeAlarmEnd() {
     }
 }
 
+// Дім — м. Київ: місто спокійне, а в Київській області тривога (окремий помаранчевий стан)
+bool AlertMonitor::OblastAlert() const {
+    if (home_ != "kyiv_city" || HomeAlert()) return false;
+    return alerts_[SlotOf("kyiv")];
+}
+
 int AlertMonitor::HomeIndex() const { return SlotOf(home_.c_str()); }
 
 bool AlertMonitor::HomeAlert() const {
@@ -517,7 +523,8 @@ void AlertMonitor::UpdateTexts() {
     else if (home_alert && !stale) { bg = 0xC62828; title = "ПОВІТРЯНА ТРИВОГА"; }
     else if (allclear_until_us_ > now && !stale) { bg = 0x1E8E3E; title = "ВІДБІЙ ТРИВОГИ"; }
     else if (stale) { bg = 0x8A5A00; title = have_data_ ? "НЕМАЄ ЗВ'ЯЗКУ" : "ЗАВАНТАЖЕННЯ…"; }
-    else { bg = 0x1F2A24; title = "Тривоги немає"; }
+    else if (OblastAlert()) { bg = 0xB45309; title = "Тривога в Київській обл."; }
+    else { bg = 0x1F2A24; title = home_ == "kyiv_city" ? "Київ: тривоги немає" : "Тривоги немає"; }
     lv_obj_set_style_bg_color(header_, lv_color_hex(bg), 0);
     lv_label_set_text(title_, title.c_str());
 
@@ -630,6 +637,7 @@ std::string AlertMonitor::StatusText() {
     if (!have_data_) return "Даних про тривоги ще немає (немає зв'язку з сервером).";
     std::string s;
     if (HomeAlert()) s = "Зараз повітряна тривога: " + HomeName() + ", триває " + Minutes(alarm_since_us_) + ".";
+    else if (OblastAlert()) s = "У самому Києві тривоги немає, але в Київській області зараз повітряна тривога.";
     else s = "Тривоги немає: " + HomeName() + ".";
     s += " Усього тривога в " + std::to_string(ActiveCount()) + " областях:";
     bool any = false;
@@ -704,6 +712,7 @@ void AlertMonitor::UpdateClock() {
     std::string st;
     if (stale) { bg = 0x5C4A12; st = have_data_ ? "немає звʼязку" : "завантаження…"; }
     else if (HomeAlert()) { bg = 0xC62828; st = "ТРИВОГА · " + place + " · " + Minutes(alarm_since_us_); }
+    else if (OblastAlert()) { bg = 0xB45309; st = "тривога в Київській обл."; }
     else { bg = 0x1E5C34; st = "тривоги немає · " + place; }
     lv_obj_set_style_bg_color(clk_pill_, lv_color_hex(bg), 0);
     lv_label_set_text(clk_status_, st.c_str());
