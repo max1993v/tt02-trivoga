@@ -3,6 +3,7 @@
 #include <cJSON.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <cstring>
@@ -150,60 +151,46 @@ bool RadioPlayer::Lookup(const std::string& query, bool genre, Station& out) {
     return SearchApi("/json/stations/search?name=" + q + tail, out);
 }
 
+// Викликається з головного потоку (команда асистента) — тут нічого мережевого, лише запит:
+// пошук і підключення робить потік радіо з більшим стеком.
 std::string RadioPlayer::Play(const std::string& query, bool genre) {
+    std::string q = Trim(query);
     {
         std::lock_guard<std::mutex> lk(mutex_);
         LoadLast();
-    }
-    Station st;
-    std::string q = Trim(query);
-    if (q.empty()) {
-        std::lock_guard<std::mutex> lk(mutex_);
-        if (station_.url.empty()) {
-            q = "Hit FM";
-        } else {
-            st = station_;
-        }
-    }
-    if (st.url.empty() && !Lookup(q, genre, st)) {
-        return "Не знайшла радіостанцію «" + q + "». Спробуй іншу назву або жанр.";
-    }
-    ESP_LOGI(TAG, "play %s (%s %dk) %s", st.name.c_str(), st.codec.c_str(), st.bitrate, st.url.c_str());
-    {
-        std::lock_guard<std::mutex> lk(mutex_);
-        station_ = st;
-        SaveLast();
+        request_.query = q;
+        request_.genre = genre;
+        pending_ = true;
+        error_.clear();
     }
     generation_++;
     active_ = true;
     EnsureTask();
-    std::string msg = "Вмикаю радіо «" + st.name + "»";
-    if (st.bitrate > 0) msg += " (" + std::to_string(st.bitrate) + " кбіт/с)";
-    msg += ". Музика почнеться, щойно ти закінчиш говорити. Відповідай дуже коротко.";
-    return msg;
+    ESP_LOGI(TAG, "request '%s' genre=%d", q.c_str(), genre);
+    if (q.empty()) return "Вмикаю радіо. Відповідай одним коротким реченням.";
+    return std::string("Шукаю й вмикаю ") + (genre ? "радіо в жанрі «" : "радіо «") + q +
+           "». Музика почнеться, щойно ти закінчиш говорити. Відповідай одним коротким реченням.";
 }
 
 void RadioPlayer::Stop() {
     if (active_) ESP_LOGI(TAG, "stop");
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        pending_ = false;
+    }
     active_ = false;
     generation_++;
 }
 
 void RadioPlayer::Toggle() {
-    if (active_) {
-        Stop();
-        return;
-    }
-    // окремий потік: пошук у мережі не повинен блокувати обробник кнопки
-    xTaskCreate([](void*) {
-        RadioPlayer::GetInstance().Play("", false);
-        vTaskDelete(nullptr);
-    }, "radio_toggle", 6144, nullptr, 3, nullptr);
+    if (active_) Stop();
+    else Play("", false);
 }
 
 std::string RadioPlayer::NowPlaying() {
-    if (!active_) return "";
     std::lock_guard<std::mutex> lk(mutex_);
+    if (!active_) return error_until_us_ > esp_timer_get_time() ? error_ : "";
+    if (pending_) return "пошук…";
     return station_.name;
 }
 
@@ -211,7 +198,7 @@ void RadioPlayer::EnsureTask() {
     std::lock_guard<std::mutex> lk(mutex_);
     if (task_started_) return;
     task_started_ = true;
-    xTaskCreate(TaskEntry, "radio", 8192, this, 4, nullptr);
+    xTaskCreate(TaskEntry, "radio", 12288, this, 4, nullptr);
 }
 
 void RadioPlayer::TaskEntry(void* arg) {
@@ -235,6 +222,39 @@ void RadioPlayer::Loop() {
             vTaskDelay(pdMS_TO_TICKS(300));
             continue;
         }
+        // новий запит: пошук станції (одразу, навіть поки асистент ще говорить)
+        bool has_req = false;
+        Request req;
+        {
+            std::lock_guard<std::mutex> lk(mutex_);
+            if (pending_) { req = request_; has_req = true; }
+        }
+        if (has_req) {
+            uint32_t gen = generation_;
+            Station st;
+            bool ok = false;
+            if (req.query.empty()) {
+                std::lock_guard<std::mutex> lk(mutex_);
+                if (!station_.url.empty()) { st = station_; ok = true; }
+            }
+            if (!ok) ok = Lookup(req.query.empty() ? "Hit FM" : req.query, req.genre, st);
+            std::lock_guard<std::mutex> lk(mutex_);
+            if (generation_ != gen) continue;          // поки шукали, прийшов новий запит / стоп
+            pending_ = false;
+            if (ok) {
+                ESP_LOGI(TAG, "found %s (%s %dk) %s", st.name.c_str(), st.codec.c_str(), st.bitrate, st.url.c_str());
+                station_ = st;
+                SaveLast();
+                failures = 0;
+            } else {
+                ESP_LOGW(TAG, "not found: %s", req.query.c_str());
+                error_ = "не знайдено «" + req.query + "»";
+                error_until_us_ = esp_timer_get_time() + 20LL * 1000 * 1000;
+                active_ = false;
+                continue;
+            }
+        }
+
         auto state = app.GetDeviceState();
         if (state != kDeviceStateIdle) {
             // Розмова: чекаємо. Коли асистент договорив і знову слухає — закриваємо сесію,

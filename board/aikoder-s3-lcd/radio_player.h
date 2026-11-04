@@ -19,7 +19,7 @@ public:
     void Stop();
     void Toggle();                       // вимкнути / увімкнути останню станцію
     bool IsActive() const { return active_; }
-    std::string NowPlaying();            // назва станції або ""
+    std::string NowPlaying();            // назва станції / «пошук…» / помилка, або ""
 
 private:
     RadioPlayer() = default;
@@ -41,6 +41,11 @@ private:
     void SaveLast();
     void LoadLast();
 
+    struct Request { std::string query; bool genre = false; };
+    bool pending_ = false;
+    Request request_;
+    std::string error_;
+    int64_t error_until_us_ = 0;
     std::mutex mutex_;
     Station station_;
     std::atomic<bool> active_{false};
