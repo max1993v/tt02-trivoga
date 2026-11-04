@@ -7,6 +7,7 @@
 #include <esp_sleep.h>
 
 #include "alert_monitor.h"
+#include "radio_player.h"
 #include "application.h"
 #include "mcp_server.h"
 #include "button.h"
@@ -157,6 +158,11 @@ class AiKoderS3LcdBoard : public WifiBoard {
             }
             app.ToggleChatState();
         });
+        // Подвійний клік основної кнопки — вимкнути радіо / увімкнути останню станцію
+        boot_button_.OnDoubleClick([this]() {
+            power_save_timer_->WakeUp();
+            RadioPlayer::GetInstance().Toggle();
+        });
         boot_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             auto& app = Application::GetInstance();
@@ -205,6 +211,32 @@ class AiKoderS3LcdBoard : public WifiBoard {
                 if (!m.SetModeByName(p["mode"].value<std::string>()))
                     return std::string("Невідомий режим. Доступні: map, clock, face, auto.");
                 return std::string("Показано: ") + m.ModeName();
+            });
+        mcp.AddTool("self.radio.play",
+            "Увімкнути інтернет-радіо (безкоштовний каталог Radio Browser). ALWAYS call this when the user asks to play "
+            "radio or music: 'увімкни радіо', 'увімкни Хіт FM', 'постав Kiss FM', 'увімкни джаз', 'хочу послухати музику'. "
+            "station: the station name in Latin script as it is usually written, e.g. 'Hit FM', 'Kiss FM', 'Radio Roks', "
+            "'Lux FM', 'Melodia FM', 'Radio Relax', 'Nashe Radio' — prefer Ukrainian stations; "
+            "or a genre in English (jazz, rock, pop, lofi, classical, chillout, dance, ukrainian) with genre=true. "
+            "Empty station = resume the last station. Specific songs on demand are not available — offer a station or genre instead. "
+            "After calling, answer in ONE short sentence; music starts when you stop talking.",
+            PropertyList({Property("station", kPropertyTypeString), Property("genre", kPropertyTypeBoolean, false)}),
+            [](const PropertyList& p) -> ReturnValue {
+                return RadioPlayer::GetInstance().Play(p["station"].value<std::string>(), p["genre"].value<bool>());
+            });
+        mcp.AddTool("self.radio.stop",
+            "Вимкнути радіо / музику. Use for: 'вимкни радіо', 'стоп музика', 'вимкни музику', 'тиша'.",
+            PropertyList(),
+            [](const PropertyList&) -> ReturnValue {
+                RadioPlayer::GetInstance().Stop();
+                return true;
+            });
+        mcp.AddTool("self.radio.now_playing",
+            "Яка радіостанція зараз грає (порожньо — радіо вимкнене).",
+            PropertyList(),
+            [](const PropertyList&) -> ReturnValue {
+                auto n = RadioPlayer::GetInstance().NowPlaying();
+                return n.empty() ? std::string("Радіо вимкнене.") : "Грає радіо «" + n + "».";
             });
         mcp.AddTool("self.air_alert.set_sound",
             "Enable or disable the siren / all-clear sounds for air alerts.",

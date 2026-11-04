@@ -9,6 +9,7 @@
 #include <ctime>
 
 #include "alert_sounds.h"
+#include "radio_player.h"
 #include "application.h"
 #include "board.h"
 #include "display/display.h"
@@ -317,6 +318,7 @@ void AlertMonitor::Apply(const bool a[UA_REGION_COUNT + 1], const std::string& s
 }
 
 void AlertMonitor::OnHomeAlarmStart(bool play_siren) {
+    RadioPlayer::GetInstance().Stop();      // тривога важливіша за музику
     alarm_since_us_ = esp_timer_get_time();
     force_map_until_us_ = alarm_since_us_ + kForceMapUs;
     allclear_until_us_ = 0;
@@ -522,6 +524,8 @@ void AlertMonitor::UpdateTexts() {
     std::string left = home_ == "kyiv_city" ? std::string("Київ") : HomeName();
     if ((home_alert || testing) && alarm_since_us_) left += " · " + Minutes(alarm_since_us_);
     auto dst = Application::GetInstance().GetDeviceState();
+    std::string radio = RadioPlayer::GetInstance().NowPlaying();
+    if (!radio.empty() && !home_alert && !testing) left = "Радіо · " + radio;
     if (dst == kDeviceStateListening) left = "Слухаю…";
     else if (dst == kDeviceStateSpeaking) left = "Говорю…";
     else if (dst == kDeviceStateConnecting) left = "З'єднання…";
@@ -597,6 +601,7 @@ void AlertMonitor::CycleMode() {
 }
 
 void AlertMonitor::StartTest() {
+    RadioPlayer::GetInstance().Stop();
     ESP_LOGI(TAG, "test alarm");
     test_until_us_ = esp_timer_get_time() + kTestUs;
     alarm_since_us_ = esp_timer_get_time();
@@ -708,6 +713,13 @@ void AlertMonitor::UpdateClock() {
     if (dst == kDeviceStateListening) foot = "Слухаю…";
     else if (dst == kDeviceStateSpeaking) foot = "Говорю…";
     else if (dst == kDeviceStateConnecting) foot = "Зʼєднання…";
+    else if (!RadioPlayer::GetInstance().NowPlaying().empty()) {
+        static std::string rb;
+        rb = "Радіо · " + RadioPlayer::GetInstance().NowPlaying();
+        lv_obj_set_style_text_color(clk_foot_, lv_color_hex(0xF6C453), 0);
+        lv_label_set_text(clk_foot_, rb.c_str());
+        return;
+    }
     else if (have_data_ && !stale) {
         static char b[48];
         snprintf(b, sizeof(b), "тривога в %d обл.", ActiveCount());
