@@ -6,6 +6,7 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -88,7 +89,7 @@ void RadioPlayer::SaveLast() {
     st.SetInt("bitrate", station_.bitrate);
 }
 
-bool RadioPlayer::SearchApi(const std::string& path, Station& out) {
+bool RadioPlayer::SearchApi(const std::string& path, std::vector<Station>& out) {
     auto network = Board::GetInstance().GetNetwork();
     for (const char* host : kApiHosts) {
         auto http = network->CreateHttp(3);
@@ -111,7 +112,6 @@ bool RadioPlayer::SearchApi(const std::string& path, Station& out) {
             cJSON_Delete(root);
             continue;
         }
-        bool found = false;
         cJSON* item = nullptr;
         cJSON_ArrayForEach(item, root) {
             auto str = [&](const char* k) {
@@ -126,23 +126,37 @@ bool RadioPlayer::SearchApi(const std::string& path, Station& out) {
             if (cJSON_IsNumber(ok) && ok->valueint != 1) continue;
             if (u.find(".m3u8") != std::string::npos || u.find(".pls") != std::string::npos ||
                 u.find(".m3u") != std::string::npos) continue;
-            out.name = Trim(str("name"));
-            out.url = u;
-            out.codec = codec;
+            bool dup = false;
+            for (auto& o : out) if (o.url == u) dup = true;
+            if (dup) continue;
+            Station st;
+            st.name = Trim(str("name"));
+            st.url = u;
+            st.codec = codec;
             cJSON* br = cJSON_GetObjectItem(item, "bitrate");
-            out.bitrate = cJSON_IsNumber(br) ? br->valueint : 0;
-            found = true;
-            break;
+            st.bitrate = cJSON_IsNumber(br) ? br->valueint : 0;
+            out.push_back(st);
         }
         cJSON_Delete(root);
-        return found;     // сервер відповів — інші не питаємо
+        // MP3 — найнадійніше; дуже високий бітрейт — у кінець
+        std::stable_sort(out.begin(), out.end(), [](const Station& a, const Station& b) {
+            auto score = [](const Station& x) {
+                int sc = IsAac(x.codec) ? 1 : 0;
+                if (x.bitrate > 192) sc += 2;
+                return sc;
+            };
+            return score(a) < score(b);
+        });
+        if (out.size() > 6) out.resize(6);
+        return !out.empty();     // сервер відповів — інші не питаємо
     }
     return false;
 }
 
-bool RadioPlayer::Lookup(const std::string& query, bool genre, Station& out) {
+bool RadioPlayer::Lookup(const std::string& query, bool genre, std::vector<Station>& out) {
     std::string q = UrlEncode(Trim(query));
-    const std::string tail = "&order=clickcount&reverse=true&hidebroken=true&limit=15";
+    const std::string tail = "&order=clickcount&reverse=true&hidebroken=true&limit=20";
+    out.clear();
     if (genre) {
         return SearchApi("/json/stations/search?tag=" + q + tail, out);
     }
@@ -229,20 +243,21 @@ void RadioPlayer::Loop() {
         }
         if (has_req) {
             uint32_t gen = generation_;
-            Station st;
+            std::vector<Station> cands;
             bool ok = false;
             if (req.query.empty()) {
                 std::lock_guard<std::mutex> lk(mutex_);
-                if (!station_.url.empty()) { st = station_; ok = true; }
+                if (!station_.url.empty()) { cands.push_back(station_); ok = true; }
             }
-            if (!ok) ok = Lookup(req.query.empty() ? "Hit FM" : req.query, req.genre, st);
+            if (!ok) ok = Lookup(req.query.empty() ? "Hit FM" : req.query, req.genre, cands);
             std::lock_guard<std::mutex> lk(mutex_);
             if (generation_ != gen) continue;          // поки шукали, прийшов новий запит / стоп
             pending_ = false;
             if (ok) {
-                ESP_LOGI(TAG, "found %s (%s %dk) %s", st.name.c_str(), st.codec.c_str(), st.bitrate, st.url.c_str());
-                station_ = st;
-                SaveLast();
+                for (auto& c : cands) ESP_LOGI(TAG, "candidate: %s (%s %dk) %s", c.name.c_str(), c.codec.c_str(), c.bitrate, c.url.c_str());
+                candidates_ = cands;
+                cand_idx_ = 0;
+                station_ = candidates_[0];
                 failures = 0;
             } else {
                 ESP_LOGW(TAG, "not found: %s", req.query.c_str());
@@ -281,16 +296,27 @@ void RadioPlayer::Loop() {
         }
         uint32_t gen = generation_;
         auto r = StreamOnce(st, gen);
-        if (r == Result::Failed || r == Result::Ended) {
-            if (++failures >= kMaxFailures) {
-                ESP_LOGW(TAG, "too many failures, stopping");
+        if (r == Result::Playing) {
+            failures = 0;
+        } else if (r == Result::Failed) {
+            // цей потік не працює — пробуємо наступну адресу станції
+            std::lock_guard<std::mutex> lk(mutex_);
+            if (generation_ != gen) continue;
+            if (cand_idx_ + 1 < (int)candidates_.size()) {
+                cand_idx_++;
+                station_ = candidates_[cand_idx_];
+                ESP_LOGW(TAG, "trying next stream %d/%d", cand_idx_ + 1, (int)candidates_.size());
+            } else if (++failures >= kMaxFailures) {
+                ESP_LOGW(TAG, "all streams failed, stopping");
+                error_ = "не вдалося підключитися";
+                error_until_us_ = esp_timer_get_time() + 20LL * 1000 * 1000;
                 active_ = false;
                 failures = 0;
             } else {
-                vTaskDelay(pdMS_TO_TICKS(2000));
+                cand_idx_ = 0;
+                if (!candidates_.empty()) station_ = candidates_[0];
+                vTaskDelay(pdMS_TO_TICKS(1500));
             }
-        } else {
-            failures = 0;
         }
     }
 }
@@ -351,19 +377,21 @@ RadioPlayer::Result RadioPlayer::StreamOnce(const Station& st, uint32_t gen) {
     esp_ae_rate_cvt_handle_t resampler = nullptr;
     int src_rate = 0, channels = 0;
     bool got_info = false;
-    Result result = Result::Ended;
+    Result result = Result::Failed;
+    bool saved = false;
+    std::vector<int16_t> batch;
+    const size_t batch_target = out_rate / 4;     // ~250 мс за раз: запас проти пауз при перемальовуванні екрана
+    batch.reserve(batch_target + 2048);
     int64_t total = 0;
 
     while (in_buf && out_buf) {
-        if (!active_ || generation_ != gen) { result = Result::Stopped; break; }
-        if (app.GetDeviceState() != kDeviceStateIdle) { result = Result::Paused; break; }
+        if (!active_ || generation_ != gen) { if (result != Result::Playing) result = Result::Stopped; break; }
+        if (app.GetDeviceState() != kDeviceStateIdle) { if (result != Result::Playing) result = Result::Paused; break; }
 
         int n = http->Read((char*)in_buf, kInBufSize);
         if (n <= 0) {
             ESP_LOGW(TAG, "stream ended (%d), %lld bytes", n, total);
-            result = total > 64 * 1024 ? Result::Ended : Result::Failed;
-            if (total > 64 * 1024) result = Result::Paused;   // довго грало — просто перепідключимось
-            break;
+            break;          // Playing → перепідключимось до цього ж потоку; Failed → наступний
         }
         total += n;
 
@@ -429,9 +457,21 @@ RadioPlayer::Result RadioPlayer::StreamOnce(const Station& st, uint32_t gen) {
                 } else {
                     pcm = std::move(mono);
                 }
-                // черга відтворення блокує, доки є місце, — так тримаємо темп потоку
-                while (!app.GetAudioService().PushPcmToPlaybackQueue(std::move(pcm), 500)) {
-                    if (!active_ || generation_ != gen || app.GetDeviceState() != kDeviceStateIdle) break;
+                if (!saved) {
+                    saved = true;
+                    result = Result::Playing;
+                    std::lock_guard<std::mutex> lk(mutex_);
+                    if (generation_ == gen) SaveLast();      // запам'ятовуємо робочий потік
+                }
+                batch.insert(batch.end(), pcm.begin(), pcm.end());
+                if (batch.size() >= batch_target) {
+                    // черга відтворення блокує, доки є місце, — так тримаємо темп потоку
+                    std::vector<int16_t> chunk;
+                    chunk.swap(batch);
+                    batch.reserve(batch_target + 2048);
+                    while (!app.GetAudioService().PushPcmToPlaybackQueue(std::move(chunk), 500)) {
+                        if (!active_ || generation_ != gen || app.GetDeviceState() != kDeviceStateIdle) break;
+                    }
                 }
             }
             if (raw.consumed == 0 && out.decoded_size == 0) break;   // потрібні нові дані

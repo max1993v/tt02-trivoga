@@ -9,6 +9,7 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <vector>
 
 class RadioPlayer {
 public:
@@ -33,12 +34,12 @@ private:
         int bitrate = 0;
     };
 
-    bool Lookup(const std::string& query, bool genre, Station& out);
-    bool SearchApi(const std::string& path, Station& out);
+    bool Lookup(const std::string& query, bool genre, std::vector<Station>& out);
+    bool SearchApi(const std::string& path, std::vector<Station>& out);
     void EnsureTask();
     static void TaskEntry(void* arg);
     void Loop();
-    enum class Result { Paused, Stopped, Failed, Ended };
+    enum class Result { Playing, Paused, Stopped, Failed };
     Result StreamOnce(const Station& st, uint32_t gen);
     void SaveLast();
     void LoadLast();
@@ -50,6 +51,8 @@ private:
     int64_t error_until_us_ = 0;
     std::mutex mutex_;
     Station station_;
+    std::vector<Station> candidates_;
+    int cand_idx_ = 0;
     std::atomic<bool> active_{false};
     std::atomic<uint32_t> generation_{0};
     std::atomic<bool> resume_armed_{false};

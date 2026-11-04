@@ -87,6 +87,8 @@ private:
     std::atomic<bool> visible_{false};
     std::atomic<int> mode_{kModeAuto};
     int shown_ = -1;
+    uint32_t map_sig_ = 0;
+    bool map_force_ = true;
     std::atomic<int64_t> force_map_until_us_{0};
     bool city_seen_ = false;
     std::atomic<int64_t> test_until_us_{0};

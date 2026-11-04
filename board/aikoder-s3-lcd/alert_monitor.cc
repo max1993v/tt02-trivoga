@@ -491,6 +491,13 @@ void AlertMonitor::RenderMap() {
         bool is_home = i == home_paint;
         lut[i] = stale ? c_stale : on ? (is_home ? c_home_alert : c_alert) : (is_home ? c_home : c_calm);
     }
+    // перемальовуємо лише якщо щось змінилося (повний кадр мапи забирає час у звуку радіо)
+    uint32_t sig = 2166136261u;
+    for (int i = 0; i <= UA_REGION_COUNT; i++) sig = (sig ^ lut[i]) * 16777619u;
+    sig = (sig ^ (uint32_t)alerts_[0]) * 16777619u;
+    if (sig == map_sig_ && !map_force_) return;
+    map_sig_ = sig;
+    map_force_ = false;
     // регіони + підписи міст (біле AA-напис із темним контуром)
     for (int p = 0; p < UA_MAP_W * UA_MAP_H; p++) {
         uint16_t c = lut[kUaMap[p]];
@@ -554,6 +561,7 @@ void AlertMonitor::Show(int what) {
     shown_ = what;
     visible_ = what == 0;
     if (what == 0) {
+        map_force_ = true;
         RenderMap();
         UpdateTexts();
         lv_obj_add_flag(clock_root_, LV_OBJ_FLAG_HIDDEN);
